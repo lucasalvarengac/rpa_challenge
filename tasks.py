@@ -19,7 +19,7 @@ def crawler():
         browser.configure(
             browser_engine="chromium",
             screenshot="only-on-failure",
-            headless=False,
+            headless=True,
         )
         try:
             selenium = Selenium(timeout=timeout)
