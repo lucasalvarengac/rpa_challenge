@@ -5,7 +5,9 @@ dependencies:
   - python=3.10.2
   - robocorp-truststore=0.8.0
   - pip=23.2.1
+  - pandas==2.2.2
   - pip:
     - rpaframework==28.5.1
     - robocorp==2.0.1
     - robocorp-browser==2.3.3
+    - pandas==2.2.2

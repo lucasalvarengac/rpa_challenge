@@ -5,17 +5,64 @@ from robocorp import browser, workitems
 from robocorp.tasks import task
 from RPA.Browser.Selenium import Selenium, ElementNotFound, ChromeOptions
 from dateutil.relativedelta import relativedelta
+import pandas as pd
+import re
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 os.environ["RC_WORKITEM_INPUT_PATH"] = (
     "devdata/work-items-in/workitems.json"
 )
+
+class Crawler():
+    def __init__(self, url, search_term, number_of_months, categories):
+        self.selenium = self._init_selenium()
+        self.target_date = self._get_target_date(number_of_months)
+        self.url = url
+        self.search_term = search_term
+        self.categories = categories
+
+    def _init_selenium(self, timeout):
+        browser.configure(
+            browser_engine="chromium",
+            screenshot="only-on-failure",
+            headless=True,
+        )
+        try:
+            selenium = Selenium(timeout=timeout)
+            logger.info("Selenium object instantiated successfully")
+        except Exception as e:
+            logger.error(f"An error occurred trying to instantiate the Selenium object: {e}")
+        return selenium
+    
+    def _get_target_date(self, number_of_months):
+        if number_of_months in [0, 1]:
+            target_date = datetime.now().replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+        elif number_of_months == 2:
+            target_date = (datetime.now() - relativedelta(months=1)).replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+        elif number_of_months == 3:
+            target_date = (datetime.now() - relativedelta(months=2)).replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+        logger.info(f"Target date: {target_date}")
+        return target_date
+    
+    def load_initial_page(self, url):
+        self.selenium.open_available_browser()
+        page = browser.go_to(url)
+        page.wait_until_page_contains_element("class:PagePromo-description")
 
 
 @task
 def crawler():
     def configure_browser(timeout=120):
         options = ChromeOptions()
-        options.page_load_strategy = "eager"
+        options.page_load_strategy = "none"
         browser.configure(
             browser_engine="chromium",
             screenshot="only-on-failure",
@@ -43,7 +90,7 @@ def crawler():
                 )
             return target_date
 
-        def get_news_from_list(news_list):
+        def get_news_from_list(news_list, search_term):
             news_data = []
             for news in news_list:
                 try:
@@ -58,6 +105,12 @@ def crawler():
                     link = link.get_attribute("href")
                     timestamp = date.get_attribute("data-timestamp")
                     timestamp = datetime.fromtimestamp(int(timestamp) / 1000)
+                    re_exp1 = r"\$?[0-9,.]+"
+                    re_exp2 = r"\d+[dollars|usd]"
+                    amount_of_money = (re.findall(re_exp1, title+description, re.IGNORECASE) or 
+                                                re.findall(re_exp2, title+description, re.IGNORECASE))
+                    amount_of_money = True if len(amount_of_money) > 0 else False
+                    count_search_phrase = len(re.findall(search_term, title+description, re.IGNORECASE))
 
                     news_data.append(
                         {
@@ -65,6 +118,8 @@ def crawler():
                             "description": description,
                             "link": link,
                             "timestamp": timestamp,
+                            "amount_of_money": amount_of_money,
+                            "count_search_phrase": count_search_phrase
                         }
                     )
                 except ElementNotFound as e:
@@ -101,7 +156,7 @@ def crawler():
                         "class:SearchResultsModule-results", page
                     )
                     news_list = selenium.find_elements("class:PageList-items-item", results)
-                    news_data = get_news_from_list(news_list)
+                    news_data = get_news_from_list(news_list, search_term)
                     news_data = [news for news in news_data if news["timestamp"] > target_date]
                     min_timestamp = min(news_data, key=lambda x: x["timestamp"])[
                         "timestamp"
@@ -134,3 +189,16 @@ def crawler():
         return 
 
     return get_news_search_page()
+    
+
+@task
+def consumer():
+    data = []
+    for item in workitems.outputs:
+        try:
+            data.append(item.payload)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+    data = pd.DataFrame(data)
+    
+    return
