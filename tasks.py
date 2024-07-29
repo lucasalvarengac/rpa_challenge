@@ -1,13 +1,15 @@
 import os
 from pathlib import Path
-from datetime import datetime, timedelta
-from robocorp import browser, workitems
-from robocorp.tasks import task
-from RPA.Browser.Selenium import Selenium, ElementNotFound, ChromeOptions
+from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 import re
 from logging import getLogger
+
+from robocorp import browser, workitems
+from RPA.Browser.Selenium import Selenium, ElementNotFound, ChromeOptions
+from robocorp.tasks import get_output_dir, task
+from RPA.Excel.Files import Files as Excel
 
 logger = getLogger(__name__)
 
@@ -16,14 +18,14 @@ os.environ["RC_WORKITEM_INPUT_PATH"] = (
 )
 
 class Crawler():
-    def __init__(self, url, search_term, number_of_months, categories):
-        self.selenium = self._init_selenium()
+    def __init__(self, url, search_term, number_of_months, category):
+        self.selenium = self._start_selenium()
         self.target_date = self._get_target_date(number_of_months)
         self.url = url
         self.search_term = search_term
-        self.categories = categories
+        self.category = category
 
-    def _init_selenium(self, timeout):
+    def _start_selenium(self, timeout):
         browser.configure(
             browser_engine="chromium",
             screenshot="only-on-failure",
@@ -53,10 +55,150 @@ class Crawler():
         return target_date
     
     def load_initial_page(self, url):
-        self.selenium.open_available_browser()
-        page = browser.go_to(url)
-        page.wait_until_page_contains_element("class:PagePromo-description")
+        try:
+            self.selenium.open_available_browser()
+            page = browser.go_to(url)
+        except Exception as e:
+            logger.error(f"An error occurred trying to load the initial page: {e}")
+        return
+    
+    def search_term_and_category(self, search_term, category):
+        try:
+            search_box = self.selenium.find_element("class:SearchBox-input")
+            search_box.send_keys(search_term)
+            search_box.submit()
+        except ElementNotFound as e:
+            logger.error(f"Search box with missing elements: {e}")
+            return
+        
+        try:
+            self.selenium.click('xpath:bsp-toggler["@data-toggle=search-filter"]')
+            category_list = self.selenium.find_element("xpath:li[@class='SearchFilter-items-item']")
+            for item in category_list:
+                if category in item.text:
+                    item.click()
+                    break
+            self.selenium.click('xpath:button["@data-toggle-trigger=see-all"]')
+        except ElementNotFound as e:
+            logger.error(f"Category with missing elements: {e}")
+        except Exception as e:
+            logger.error(f"An error occurred trying to click on the category: {e}")
+        return
+    
+    def get_news_list(self):
+        try:
+            page = self.selenium.find_element('tag:bsp-search-results-module')
+        except ElementNotFound as e:
+            logger.error(f": {e}")
+            return 
+        try:
+            results = self.selenium.find_element("class:SearchResultsModule-results", page)
+            news_list = self.selenium.find_elements("class:PageList-items-item", results)
+        except ElementNotFound as e:
+            logger.error(f"News with missing elements: {e}")
+            return 
+        return news_list
+    
+    def get_news_from_list(self, news_list):
+        news_data = []
+        for news in news_list:
+            try:
+                description = self.selenium.find_element("class:PagePromo-description", news)
+                title = self.selenium.find_element("class:PagePromo-title", news)
+                link = self.selenium.find_element("class:Link", title)
+                description = self.selenium.find_element("tag:span", description)
+                date = self.selenium.find_element("tag:bsp-timestamp", news)
 
+                title = title.text
+                description = description.text
+                link = link.get_attribute("href")
+                timestamp = date.get_attribute("data-timestamp")
+                timestamp = datetime.fromtimestamp(int(timestamp) / 1000)
+                re_exp1 = r"\$?[0-9,.]+"
+                re_exp2 = r"\d+[dollars|usd]"
+                amount_of_money = (re.findall(re_exp1, title+description, re.IGNORECASE) or 
+                                            re.findall(re_exp2, title+description, re.IGNORECASE))
+                amount_of_money = True if len(amount_of_money) > 0 else False
+                count_search_phrase = len(re.findall(self.search_term, title+description, re.IGNORECASE))
+
+                news_data.append(
+                    {
+                        "title": title,
+                        "description": description,
+                        "link": link,
+                        "timestamp": timestamp,
+                        "amount_of_money": amount_of_money,
+                        "count_search_phrase": count_search_phrase
+                    }
+                )
+            except ElementNotFound as e:
+                logger.error(f"Element not found in news object: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"An error occurred: {e}")
+                break
+        return news_data
+    
+    def next_page(self):
+        try:
+            self.selenium.click('xpath:div["@class=Pagination-nextPage"]')
+            self.selenium.find_element('xpath:div["@class=Pagination-nextPage"]')
+        except ElementNotFound as e:
+            logger.warning(f"No more pagination found: {e}")
+            return
+        except Exception as e:
+            logger.error(f"An error occurred trying to click on the next page: {e}")
+        
+        return
+    
+    def close_browser(self):
+        self.selenium.close_browser()
+        return
+
+class Consumer():
+    def __init__(self, data, search_term):
+        self.data = data
+        self.df = self._create_dataframe()
+        self.search_term = search_term
+
+    def _create_dataframe(self):
+        data = pd.DataFrame(self.data)
+        return data
+
+    def save_to_excel(self,path):
+        output = get_output_dir() or Path("output")
+        file_name = "news_data.xlsx"
+        path = output / file_name
+        excel = Excel()
+        try:
+            excel.create_workbook(path)
+            excel.write_to_worksheet(path, self.search_term, self.df)
+        except Exception as e:
+            logger.error(f"An error occurred trying to save the data to an Excel file: {e}")
+        return
+
+@task
+def solve_challenge():
+    news_data = []
+    for item in workitems.inputs:
+        url = item.payload["url"]
+        search_term = item.payload["search_term"]
+        number_of_months = item.payload["number_of_months"]
+        category = item.payload["category"]
+        crawler = Crawler(url, search_term, number_of_months, category)
+        crawler.load_initial_page(url)
+        crawler.search_term_and_category(search_term, category)
+        while True:
+            news_list = crawler.get_news_list()
+            page_data = crawler.get_news_from_list(news_list)
+            news_data.append(page_data)
+            crawler.next_page()
+            if len(news_list) == 0:
+                break
+        crawler.close_browser()
+    consumer = Consumer(news_data)
+    consumer.save_to_excel("news_data.xlsx")
+    return
 
 @task
 def crawler():
