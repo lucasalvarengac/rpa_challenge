@@ -2,10 +2,8 @@
 # https://github.com/robocorp/rcc/blob/master/docs/recipes.md#what-is-in-robotyaml
 
 tasks:
-  Crawler:
-    shell: python -m robocorp.tasks run tasks.py -t crawler
-  Consumer:
-    shell: python -m robocorp.tasks run consumer.py -t consumer
+  Solve Challenge:
+    shell: python -m robocorp.tasks run tasks.py -t solve_challenge
 
 environmentConfigs:
   - environment_windows_amd64_freeze.yaml
