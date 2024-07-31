@@ -14,20 +14,9 @@ from RPA.Excel.Files import Files as Excel
 
 logger = getLogger(__name__)
 
-@dataclass
 class Crawler():
-    url: str
-    search_term: str
-    number_of_months: int
-    category: Optional[str] = None
-
-    def __init__(self, url, search_term, number_of_months, category = None):
+    def __init__(self):
         self.selenium = self._start_selenium(60)
-        self.number_of_months = number_of_months
-        self.target_date = self._get_target_date()
-        self.url = url
-        self.search_term = search_term
-        self.category = category
 
     def _start_selenium(self, timeout):
         browser.configure(
@@ -175,15 +164,50 @@ class Crawler():
     def close_browser(self):
         self.selenium.close_browser()
         return
+    
+    def scrappe_url(self, url, search_term, number_of_months, category):
+        url = url
+        search_term = search_term
+        number_of_months = number_of_months
+        category = category
+        target_date = self._get_target_date()
+        self.load_initial_page()
+        self.search_term_and_category()
+        self.selenium.wait_until_element_is_visible("tag:bsp-search-results-module", 15)
+        step_date = datetime.now()
+        page_data = []
+        while target_date <= step_date:
+            news_list = self.get_news_list()
+            if not news_list:
+                break
+            page_data = self.get_news_from_list(news_list)
+            if len(page_data) == 0:
+                break
+            page_data.append(page_data)
+            self.next_page()
+            step_date = min([news["timestamp"] for news in page_data])
+            logger.info(f"Step date: {step_date}")
+        self.close_browser()
+        return page_data
+    
+    def run(self):
+        for item in workitems.inputs:
+            url = item.payload.get("url", None)
+            search_term = item.payload.get("search_term", None)
+            number_of_months = item.payload.get("number_of_months", None)
+            category = item.payload.get("category", None)
+            data = self.scrappe_url(url, search_term, number_of_months, category)
+            item.create_output(data)
+            item.done()
+    
+    run()
 
 class Consumer():
-    def __init__(self, data, search_term):
-        self.data = data
-        self.search_term = search_term
+    def __init__(self):
+        pass
 
-    def save_to_excel(self):
-        search_term = self.search_term.replace(" ", "").lower()
-        path = f"./output/{search_term}_data.xlsx"
+    def save_to_excel(self, data: list):
+        path = f"./output/data.xlsx"
         path = Path(path)
         excel = Excel()
         wb = excel.create_workbook(path, sheet_name="news")
@@ -196,34 +220,12 @@ class Consumer():
 
         wb.save()
         return path
+    
+    def run(self):
+        for item in workitems.inputs:
+            data = item.payload.get("data", None)
+            path = self.save_to_excel(data)
+            item.add_file(path=path)
+            item.done()
 
-@task
-def solve_challenge():
-    for item in workitems.inputs:
-        item_data = []
-        url = item.payload.get("url", None)
-        search_term = item.payload.get("search_term", None)
-        number_of_months = item.payload.get("number_of_months", None)
-        category = item.payload.get("category", None)
-        crawler = Crawler(url, search_term, number_of_months, category)
-        crawler.load_initial_page()
-        crawler.search_term_and_category()
-        crawler.selenium.wait_until_element_is_visible("tag:bsp-search-results-module", 15)
-        step_date = datetime.now()
-        while crawler.target_date <= step_date:
-            news_list = crawler.get_news_list()
-            if not news_list:
-                break
-            page_data = crawler.get_news_from_list(news_list)
-            if len(page_data) == 0:
-                break
-            item_data.append(page_data)
-            crawler.next_page()
-            step_date = min([news["timestamp"] for news in page_data])
-            logger.info(f"Step date: {step_date}")
-        crawler.close_browser()
-        consumer = Consumer(item_data, search_term)
-        path = consumer.save_to_excel()
-        item.add_file(path=path)
-        item.done()
-    return
+    run()
